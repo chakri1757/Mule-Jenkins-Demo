@@ -29,7 +29,7 @@
           <muleVersion>${mule.version}</muleVersion> 
           <username>Chakri1917</username> 
           <password>Spring2020$</password> 
-          <applicationName>${artifactId}</applicationName>
+          <applicationName>Jenkins-Demo</applicationName>
           <environment>SANBOX</environment> 
           <workerType>micro</workerType>
           <workers>1</workers>
