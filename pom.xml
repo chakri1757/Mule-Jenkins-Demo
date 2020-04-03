@@ -1,13 +1,14 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
 	<groupId>com.mycompany</groupId>
-	<artifactId>mule-jenkinsdemo</artifactId>
+	<artifactId>mule-demo</artifactId>
     <version>1.0.0-SNAPSHOT</version>
-    <packaging>mule</packaging>
+    <packaging>mule-application</packaging>
 
-	<name>mule-jenkins-demo</name>
+	<name>mule-demo</name>
 
     <properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -22,26 +23,22 @@
 			<plugin>
 				<groupId>org.mule.tools.maven</groupId>
 				<artifactId>mule-maven-plugin</artifactId>
-				<version>2.0</version>
+				<version>${mule.maven.plugin.version}</version>
 				<extensions>true</extensions>
 				<configuration>
-          <deploymentType>cloudhub</deploymentType>
-          <muleVersion>${mule.version}</muleVersion> 
-          <username>Chakri1917</username> 
-          <password>Spring2020$</password> 
-          <applicationName>Jenkins-Demo</applicationName>
-          <environment>SANBOX</environment> 
-          <workerType>micro</workerType>
-          <workers>1</workers>
-          <redeploy>true</redeploy>
-        </configuration>
-        <executions>
- <execution>
- <goals>
- <goal>deploy</goal>
- </goals>
- </execution>
- </executions>
+				<cloudHubDeployment>
+    <uri>https://anypoint.mulesoft.com</uri>
+    <muleVersion>${app.runtime}</muleVersion>
+    <!-- Deploy User Parameter -->
+    <username>Chakri1917</username>
+    <password>Spring2020$</password>
+    <!-- Environment Parameter -->
+    <environment>Sandbox</environment>
+    <applicationName>mule-demo</applicationName>
+    <businessGroup>mysol</businessGroup>
+    <workerType>micro</workerType>
+</cloudHubDeployment>
+				</configuration>
 			</plugin>
 			
 		</plugins>
