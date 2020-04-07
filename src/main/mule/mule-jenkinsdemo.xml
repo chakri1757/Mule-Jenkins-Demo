@@ -5,19 +5,19 @@
 	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
 http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
 http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
-	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="d552e2af-8bde-4ca7-acf4-07c577886037" >
-		<http:listener-connection host="0.0.0.0" port="8089" />
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="d79a9d29-4665-4f27-af71-978d28b7fda3" >
+		<http:listener-connection host="0.0.0.0" port="8081" />
 	</http:listener-config>
-	<flow name="mule-jenkinsdemoFlow" doc:id="c81b55f0-55ca-4eeb-bcd4-ebe671d3b9e0" >
-		<http:listener doc:name="Listener" doc:id="3d046804-3d5d-4257-b6ef-8666b5493390" config-ref="HTTP_Listener_config" path="/welcome" allowedMethods="GET"/>
-		<ee:transform doc:name="Transform Message" doc:id="c5aa4bcd-82cc-43f2-b407-96785ca6dd14" >
-			<ee:message >
-				<ee:set-payload ><![CDATA[%dw 2.0
+	<flow name="mule-demoFlow" doc:id="f48da336-afe4-4588-b070-f86735bfdf4a" >
+		<http:listener doc:name="Listener" doc:id="bd14c283-ca7f-4522-95cf-0f71f9cdc4cf" config-ref="HTTP_Listener_config" path="/test" allowedMethods="GET"/>
+		<ee:transform doc:name="Transform Message" doc:id="a52dd683-6af5-45ea-85fc-d4b208bff5da">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
 message: 'Welcome to Mulesoft deployment to cloudhub using Jenkins Maven Plugin']]></ee:set-payload>
 			</ee:message>
 		</ee:transform>
-		<logger level="INFO" doc:name="Logger" doc:id="11ec4d8d-7b51-4d53-b4ed-4d0a7e061261" message="LogMessage: Request Completed for the Maven Configuration."/>
+		<logger level="INFO" doc:name="Logger" doc:id="62b73d3a-eceb-4fe7-870d-64c9b508c006" />
 	</flow>
 </mule>
