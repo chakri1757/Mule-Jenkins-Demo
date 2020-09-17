@@ -1,0 +1,517 @@
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput 
+
+def mvnHome
+def pom
+def skipDeploy
+def artifactVersion = ""
+   
+def mmcDEVURL = "URL"
+def mmcSTAGEURL = "URL" 
+
+
+node('docker-maven-slave') {
+//withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'dtsjenkins',
+//usernameVariable: 'USR_NAME', passwordVariable: 'USR_PWD'],
+[$class: 'UsernamePasswordMultiBinding', credentialsId: '',
+usernameVariable: 'MAVEN_USER', passwordVariable: 'MAVEN_PASS']]) {
+
+   //Checkout the docker git repository
+   
+   checkout changelog: false, poll: false, scm: [$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: '', url: 'github.URL']]]
+   
+   //Stage : Preparation - Checkout the git repository
+   //Repository and project names are in job parameter GITAPP
+   stage('Preparation') { // for display purposes
+
+        try{
+              SOURCEBRANCH = '*/' + GITBRANCH              
+                        } catch (MissingPropertyException e) {
+                                          SOURCEBRANCH = '*/WorkingBranch'
+                  }  
+                  
+                  try{
+              skipDeploy = SKIPDEPLOY
+                        } catch (MissingPropertyException e) {
+                                          skipDeploy = false
+                  }  
+      GITCONFIG = GITAPP.split(",")
+      checkout([$class: 'GitSCM', branches: [[name: SOURCEBRANCH]], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: GITCONFIG[0]]], submoduleCfg: [], userRemoteConfigs: [[credentialsId: '47f14d01-062d-4759-9451-df0d5d63c51e', url: GITCONFIG[1]]]])
+
+
+      // Get the Maven tool.
+      // ** NOTE: This 'M3' Maven tool must be configured
+      // **       in the global configuration.           
+      mvnHome = tool 'Maven'
+   }
+   //Stage : Build - Build the app that was passed
+   stage('Build') {
+
+        GITCONFIG = GITAPP.split(",")
+        dir(GITCONFIG[0]) {      
+        pom = readMavenPom file: 'pom.xml'
+
+      if (isUnix()) {
+         sh "'${mvnHome}/bin/mvn' -U -e -Dci.env= -DskipMunitTests clean deploy"
+      } else {
+         bat(/"${mvnHome}\bin\mvn" -U -e -Dci.env= -DskipMunitTests clean deploy/)
+      }
+     
+    
+   }
+   }
+    
+ 
+   
+   //Stage Deploy to Dev
+   //Use MMC API to perform the deployment to DEV
+   stage('Deploy to Dev') {
+  if(!skipDeploy) {                                                 
+            try{  
+                                               def REPOURL
+                                              def authString = "$MAVEN_USER:$MAVEN_PASS".getBytes().encodeBase64().toString()
+                                              
+                                               //Get the latest artifact version for Snapshot from Artifactory
+                                              if(pom.version.contains('SNAPSHOT')) {
+                                                            REPOURL = "https://REPOURL/artifactory/api/search/latestVersion?g=${pom.groupId}&a=${pom.artifactId}&v=${pom.version}&repos=Snapshots"
+                                              
+                                                def conn = REPOURL.toURL().openConnection()
+                                                conn.setRequestProperty( "Authorization", "Basic ${authString}" )
+                                                echo "${conn}"
+                                                echo "connection string"
+                                                             if( conn.responseCode == 200 ) {
+                                                               artifactVersion = conn.content.text
+                                                            }
+                                             }                                                                                          
+                                              else {
+                                                              artifactVersion = pom.version
+                                              }
+                                              
+                                              deploymentFlow(pom.artifactId,mmcDEVURL,'Development',artifactVersion,pom,false)
+                                              notify("Deploy to Dev is complete. Approval Required for next stages.")
+                                              }catch(err) {                                                                                                                                                                                                                                                  
+                                                                                            notify("Deployment to DEV failed " + err)
+                                                                                            throw err
+                                                                                            }
+                                              }                                             
+  }
+
+   //Stage Results
+   //Archive the zip results as part of the job
+   stage('Results') {
+                 stash includes: '*/target/*', name: 'appzip'
+      archive '*/target/*'
+   }
+
+   }
+   }
+   
+   //Stage Deploy to Test
+   //Use MMC API to perform the deployment to TEST
+   //Deploy the same dev application in repository to TEST
+   stage('Deploy to Test') {
+   //1. Get Dev deployment
+   //2. Get Test server id
+   //3. Delete test deployment - Test deployment will be application name + "-test"
+   //4. Create and trigger test deployment with the same .zip file as dev in MMC repository
+   
+   if(!skipDeploy) {  
+                try{
+             def answer = input message: 'Do you approve deploy to Test?', submitter: 'NAME', submitterParameter: 'approver'
+             milestone label: 'TestDeploy'    
+
+                node('docker-maven-slave') {
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: '',
+                usernameVariable: 'USR_NAME', passwordVariable: 'USR_PWD'],
+                [$class: 'UsernamePasswordMultiBinding', credentialsId: '',
+                usernameVariable: 'MAVEN_USER', passwordVariable: 'MAVEN_PASS']]) {
+
+                def devApp = getDeploymentByName(pom.artifactId,mmcDEVURL)                
+                echo 'Application ' + devApp
+                def testAppName = pom.artifactId + "-test"
+
+                def testServerId  = getServerIdByName('Test',mmcDEVURL)
+                if(testServerId.size() < 1) {
+                           echo 'Test Server ID cannot be retrieved'
+                 }
+                 else {
+                        
+                                //Delete test Application
+                                deleteDeploymentByName(testAppName,mmcDEVURL)
+                                sh "sleep 100"
+                                //Create and Deploy test application                
+                                createAndDeploy(testAppName,testServerId[0],devApp,mmcDEVURL,false)
+                                notify("SUCCESSFUL: Deploy to TEST is complete. Approval Required for next stages.")
+                }
+                }
+                }
+                }catch(org.jenkinsci.plugins.workflow.steps.FlowInterruptedException err) {
+                  echo 'Test Deployment canceled'
+                    throw err
+                }
+                catch(err) {                                                                                                                                                        
+                                notify("FAILED : Deployment to TEST failed " + err)
+                                throw err
+                }                                
+             }                
+     
+   }
+   
+      //Stage Deploy to Stage
+   //Use MMC API to perform the deployment to Stage
+   //Upload and deploy in Stage MMC
+   //stage('Deploy to Stage') {
+   //if(!skipDeploy) {     
+               // try{
+             //def answer = input message: 'Do you approve deploy to Stage?', submitter: '', submitterParameter: ''
+                // milestone label: 'StageDeploy'    
+
+                //node('docker-maven-slave') {
+                //withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: '',
+                //usernameVariable: 'USR_NAME', passwordVariable: 'USR_PWD'],
+                //[$class: 'UsernamePasswordMultiBinding', credentialsId: '',
+                //usernameVariable: 'MAVEN_USER', passwordVariable: 'MAVEN_PASS']]) {
+                //unstash 'appzip'
+                //deploymentFlow(pom.artifactId,mmcSTAGEURL,'New Cluster 3.8',artifactVersion,pom,true)             
+               // notify("SUCCESSFUL : Deploy to STAGE is complete. Approval Required for next stages.")
+                //}
+                //}
+                //}catch(org.jenkinsci.plugins.workflow.steps.FlowInterruptedException err) {
+                  //echo 'Stage Deployment canceled'
+                   // throw err
+                //}catch(err) {                                                                                                                                        
+                                //notify("FAILED : Deployment to STAGE failed " + err)
+                               // println err
+                                //throw err
+                               // }                
+               // }
+                
+     
+  // }
+  
+
+//Common Flow for Dev and Stage
+//1. Upload to Repository
+//2. Get server group or cluster id
+//3. Delete previous deployment
+//4. Create and Trigger deployment
+
+def deploymentFlow(name,mmcURL,server,artifactVersion,pom,isCluster) {
+                    def uploadedVersion = ""
+                          if(artifactVersion != "") {
+                            uploadedVersion = uploadArtifactory(name,artifactVersion,mmcURL,pom)
+                                echo "Artifact " + name + " deployed to Artifactory. Uploaded VersionID : " + uploadedVersion
+                             //Upload to Repository
+                          }
+                          
+                          def deploymentId = ""
+                          if(uploadedVersion != "" && uploadedVersion != null) {
+                           //Get Server ID or clusterID
+                         def destID
+                           if(isCluster) {
+                                 destID  = getClusterIdByName(server,mmcURL)
+                         }
+                         else {
+                                 destID  = getServerIdByName(server,mmcURL)
+                                 if(destID.size() < 1) {
+                                        echo server +  " Server ID cannot be retrieved"                        
+                                        throw new Exception('Server ID is not found for ' + server )                                        
+                                }        
+                                else {
+                                        destID = destID[0]
+                                }
+                         }
+                          
+                              // Delete Deployment
+                                  deleteDeploymentByName(name,mmcURL)
+
+                                echo "Deployment " + name + " deleted."
+                                        sh "sleep 100"
+
+                                   // Create Deployment
+                                   createAndDeploy(name,destID,uploadedVersion,mmcURL,isCluster)                                
+                          } 
+                        else {
+                                throw new Exception('Upload to Repository failed')                                        
+                        }
+
+}
+
+//Upload the .zip artifact to MMC repository
+//Returns VersionID
+
+def uploadArtifactory(name,artifactVersion,mmcURL,pom) {
+
+
+  def addr = mmcURL + "/repository"
+  def fileName = env.WORKSPACE + "/" + pom.artifactId + "/target/" + pom.artifactId + "-" + pom.version + ".zip"
+  def curlCmd = 'curl --basic -ku "' + USR_NAME + ":" + USR_PWD + '"  -F file=@' + fileName +
+  " -F name=" + name + " -F version=" + artifactVersion + 
+  ' -H "Content-Type:multipart/form-data" ' +  addr
+  echo curlCmd
+  sh "${curlCmd}"
+
+  
+  def authString = "${USR_NAME}:${USR_PWD}".getBytes().encodeBase64().toString()
+        def conn = addr.toURL().openConnection()
+        conn.setRequestProperty( "Authorization", "Basic ${authString}" )
+               echo "${conn}"
+               echo "mmc"
+               echo "${conn.responseCode}"
+               echo "${conn.content.text}"
+        if( conn.responseCode == 200 ) {
+          def result = new JsonSlurper().parseText( conn.content.text )
+          println result
+          println name
+          for (it in result.data) {
+            for (version in it.versions) {
+            if (version.parentPath ==  "/Applications/" + name &&
+                    version.name == artifactVersion) {                  
+              return version.id                  
+            }
+          }
+          }
+  }
+  else {
+  println conn.responseCode
+  }
+  return ""
+
+}
+
+//Returns ApplicationID corresponding to the deployment name parameter
+def getDeploymentByName(name,mmcURL) {
+  def authString = "${USR_NAME}:${USR_PWD}".getBytes().encodeBase64().toString()
+  def addr = mmcURL + "/deployments"
+        def conn = addr.toURL().openConnection()
+        conn.setRequestProperty( "Authorization", "Basic ${authString}" )
+        if( conn.responseCode == 200 ) {
+          def result = new JsonSlurper().parseText( conn.content.text )
+          println result
+          println name
+          for (it in result.data) {
+            if (it.name == name && it.applications.size() > 0) {                  
+              return it.applications[0] 
+            }
+          }
+          }
+        else {
+          println "GetDeployment By Name failed " + conn.responseCode
+        }  
+  return ""
+}
+
+//Returns Deployment ID corresponding to the deployment name parameter
+
+def getDeploymentIdByName(name,mmcURL) {
+  def authString = "${USR_NAME}:${USR_PWD}".getBytes().encodeBase64().toString()
+  def addr = mmcURL + "/deployments"     
+        def conn = addr.toURL().openConnection()
+        conn.setRequestProperty( "Authorization", "Basic ${authString}" )
+        if( conn.responseCode == 200 ) {
+          def result = new JsonSlurper().parseText( conn.content.text )
+          println result
+          println name
+          for (it in result.data) {
+            if (it.name == name) {
+              return it.id                  
+            }
+          }
+  }  
+  else {
+          println "GetDeployment By Name failed " + conn.responseCode
+        }  
+  return ""
+}
+
+//Returns Server ID corresponding to the server/server group name parameter
+
+def getServerIdByName(name,mmcURL) {
+   def authString = "${USR_NAME}:${USR_PWD}".getBytes().encodeBase64().toString()
+  def addr = mmcURL + "/servers"
+        def conn = addr.toURL().openConnection()
+        def serverIds = []
+        conn.setRequestProperty( "Authorization", "Basic ${authString}" )
+        if( conn.responseCode == 200 ) {
+          def result = new JsonSlurper().parseText( conn.content.text )          
+          result.data.each {
+            def serverId = it.id
+            for(group in it.groups) {
+                    if (group.name == name) {
+                      serverIds << serverId
+                    }
+            }
+          }
+  }
+  return serverIds
+}
+
+//Returns Cluster ID corresponding to the cluster name parameter
+def getClusterIdByName(name,mmcURL) {
+   def authString = "${USR_NAME}:${USR_PWD}".getBytes().encodeBase64().toString()
+  def addr = mmcURL + "/clusters"
+        def conn = addr.toURL().openConnection()
+        conn.setRequestProperty( "Authorization", "Basic ${authString}" )
+        if( conn.responseCode == 200 ) {
+          def result = new JsonSlurper().parseText( conn.content.text )          
+          for(it in result.data) {
+                if (it.name == name) {
+                        return it.id          
+                }
+          }
+  }
+  throw new Exception('Cluster Name is not found - ' + name )
+}
+
+//Deletes the deployment corresponding to the deployment name parameter
+def deleteDeploymentByName(name,mmcURL){  
+  def deploymentId = getDeploymentIdByName(name,mmcURL)
+  echo 'Deployment Id ' + deploymentId  
+  if(deploymentId != "") {
+        def sout = new StringBuffer(), serr = new StringBuffer()    
+    def url = mmcURL + "/deployments/" + deploymentId
+    println deploymentId
+    println url
+    def proc=["curl","--basic","-ku","${USR_NAME}:${USR_PWD}","-X","DELETE",url].execute()
+    proc.consumeProcessOutput(sout, serr)
+    proc.waitForOrKill(5000)
+    println sout
+    println serr
+        
+        if(sout.toString().toLowerCase().contains("error") || serr.toString().toLowerCase().contains("error")) {
+          throw new Exception('Delete Deployment Failed.')
+        }
+
+  }
+}
+
+//Creates the deployment with the application Id in the server/cluster passed
+//Triggers the deployment
+
+def createAndDeploy(name,destId,applicationId,mmcURL,isCluster) {
+
+    mmcURL = mmcURL + "/deployments/"
+        def json
+        if(isCluster) {
+                json = "{\"name\" : \"${name}\" , \"clusters\": [ \"${destId}\" ], \"applications\":[ \"" + applicationId +"\"]}"
+        }
+        else {
+                json = "{\"name\" : \"${name}\" , \"servers\": [ \"${destId}\" ], \"applications\":[ \"" + applicationId +"\"]}"
+        }
+    def sout = new StringBuffer(), serr = new StringBuffer()    
+    println applicationId
+        def proc=["curl","--basic","-ku","${USR_NAME}:${USR_PWD}","-d",json,"-H","Content-Type:application/json","-H", "Accept:application/json",mmcURL].execute()
+    proc.consumeProcessOutput(sout, serr)
+    proc.waitForOrKill(5000)
+    println sout
+    println serr
+  
+          if(sout.toString().toLowerCase().contains("error") || serr.toString().toLowerCase().contains("error")) {
+          throw new Exception('Create Deployment Failed.')
+        }
+        
+    def newDepl = new JsonSlurper().parseText( sout.toString() )
+    println newDepl.id
+    def deplURL = mmcURL + newDepl.id + "/deploy"
+    println deplURL
+  
+    echo "Deployment " + name + " created."   
+        
+    sout = new StringBuffer()
+    serr = new StringBuffer()
+    proc=["curl","--basic","-ku","${USR_NAME}:${USR_PWD}","-X","POST",deplURL].execute()
+    proc.consumeProcessOutput(sout, serr)
+    proc.waitForOrKill(5000)
+    println sout
+    println "Serr" + serr
+        
+        if(sout.toString().toLowerCase().contains("error") || serr.toString().toLowerCase().contains("error")) {
+          throw new Exception('Trigger Deployment Failed.')
+        }
+        
+        echo "Deployment for " + name + " triggered."   
+
+}
+
+
+//Email Notification Routine
+def notify(status){
+
+      
+
+        GITCONFIG = GITAPP.split(",")
+        
+        emailext (
+        to: "",
+        mimeType: 'text/html',
+       subject: "'${env.BUILD_TAG} - Status - ${status}!'",
+        attachLog: true,
+        body: """<style>
+        body, table, td, th, p {
+        font-family:verdana,helvetica,sans serif;
+        font-size:11px;
+        color:black;
+        }
+        td.bg1 { color:white; background-color:#595959; font-size:120% }
+        td.console { font-family:courier new, lucida console; }
+        </style>
+        <html>
+        <body>
+        <table border=2 cellspacing=2 cellpadding=2 width="40%">
+        <tr>
+        <td align="left" width="30%">
+        <img
+        src="" />
+        </td>
+        <td valign="center" width="70%">
+        <b style="font-size: 170%;">Jenkins Build Results</b>
+        </td>
+        </tr>
+        <tr>
+        <td>URL:</td>
+        <td>
+        <a href='${env.BUILD_URL}'>${env.JOB_NAME}</a>
+        </td>
+        </tr>
+        <tr>
+        <td>SONAR URLs:</td>
+        <td>
+        ${SONARURL}
+        </td>
+        </tr>
+        <tr>
+        <td>JOB NAME:</td>
+        <td>${env.JOB_NAME}</td>
+        </tr>
+        <tr>
+        <td>BUILD STATUS:</td>
+        <td>${status}</td>
+        </tr>
+        <tr>
+        <td>BUILD NUMBER:</td>
+        <td>${env.BUILD_DISPLAY_NAME}</td>
+        </tr>
+        <tr>
+        <td>DATE/TIME:</td>
+        <td>${env.BUILD_TIMESTAMP}</td>
+        </tr>
+        </table>
+        <br />
+        <!-- console output -->
+        <table border=0 cellspacing=2 cellpadding=2 width="40%">
+        <tr>
+        <td class="bg1">
+        <b>CONSOLE OUTPUT</b>
+        </td>
+        </tr>
+        <tr>
+        <td class="console" width="100%">
+        Please find attached build log file.
+        </td>
+        </tr>
+        </table>
+        <br />
+        </body></html>"""
+        )
+}
+
